@@ -1,0 +1,325 @@
+---
+title: "Project 2 v1.0 (P6 & P3)"
+author: "Shumeng"
+format: pdf
+---
+
+## Project 2
+
+### 1. MAF Analysis
+
+```{r, load_libraries}
+#| message: false
+#| warning: false
+# load required packages
+if (!requireNamespace("maftools", quietly = TRUE)) {
+  install.packages("BiocManager")
+  BiocManager::install("maftools")
+}
+library(maftools)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(tidyverse)
+```
+
+```{r, load_data}
+#| message: false
+#| warning: false
+vep_p3_file <- "data/P3.vep.tsv"
+vep_p6_file <- "data/P6.vep.tsv"
+
+lines_p3 <- readLines(vep_p3_file)
+header_line_p3 <- grep("^#Uploaded_variation", lines_p3)
+
+lines_p6 <- readLines(vep_p6_file)
+header_line_p6 <- grep("^#Uploaded_variation", lines_p6)
+
+# read form header
+vep_p3_data <- read.table(vep_p3_file,
+                       header = TRUE,
+                       sep = "\t",
+                       skip = header_line_p3 - 1,
+                       quote = "",
+                       stringsAsFactors = FALSE,
+                       comment.char = "")
+vep_p6_data <- read.table(vep_p6_file,
+                       header = TRUE,
+                       sep = "\t",
+                       skip = header_line_p6 - 1,
+                       quote = "",
+                       stringsAsFactors = FALSE,
+                       comment.char = "")
+
+# check
+dim(vep_p3_data)
+head(colnames(vep_p3_data))
+
+dim(vep_p6_data)
+head(colnames(vep_p6_data))
+```
+
+```{r}
+#| message: false
+#| warning: false
+# A list of functional variant types
+functional_types <- c(
+  "missense_variant", "frameshift_variant", "stop_gained",
+  "start_lost", "stop_lost", "splice_donor_variant",
+  "splice_acceptor_variant", "inframe_insertion",
+  "inframe_deletion", "protein_altering_variant",
+  "nonstop_variant", "transcript_ablation"
+)
+
+# Filter the VEP data
+vep_p3_filtered <- vep_p3_data %>%
+  filter(Consequence %in% functional_types)
+
+vep_p6_filtered <- vep_p6_data %>%
+  filter(Consequence %in% functional_types)
+
+# Check
+#dim(vep__p3filtered)
+#head(vep_p3_filtered)
+```
+
+#### TMB (Tumor Mutation burden) per sample
+
+I calculated both total and functionally relevant TMBs per sample.
+
+1.  Total TMB includes all somatic variants detected by Mutect2.
+
+-   P3 (Total): 4729.6 mutations/Mb
+
+-   P6 (Total ): 3350.8 mutations/Mb
+
+2.  Functional TMB considers only variants with predicted protein-level impact, such as missense, frameshift, and splice-site mutations.
+
+-   P3 (Functional): 301.3 mutations/Mb
+
+-   P6 (Functional): 136.6 mutations/Mb
+
+```{r}
+#| message: false
+#| warning: false
+# Total mutational burden (TMB)
+tmb_p3_all <- nrow(vep_p3_data) / 38
+tmb_p6_all <- nrow(vep_p6_data) / 38
+tmb_all <- tibble(Sample = c("P3", "P6"), TMB = c(tmb_p3_all, tmb_p6_all))
+
+# Functional mutation only (TMB)
+p3_func <- vep_p3_data %>%
+  filter(Consequence %in% functional_types)
+
+p6_func <- vep_p6_data %>%
+  filter(Consequence %in% functional_types)
+
+tmb_p3_func <- nrow(p3_func) / 38  # general estimates
+tmb_p6_func <- nrow(p6_func) / 38
+tmb_func <- tibble(Sample = c("P3", "P6"), TMB = c(tmb_p3_func, tmb_p6_func))
+
+tmb_all
+tmb_func
+```
+
+#### The top 10 genes with the highest frequency of mutations in P3 and P6
+
+```{r}
+#| message: false
+#| warning: false
+# Top 10 most frequently mutated genes
+plot_top_mutated_genes <- function(df, sample_name, bar_color = "steelblue") {
+  top_genes <- df %>%
+    filter(!is.na(SYMBOL) & SYMBOL != "" & SYMBOL != "-") %>%
+    count(SYMBOL, sort = TRUE) %>%
+    slice_max(n, n = 10)
+  
+  # Plot
+  ggplot(top_genes, aes(x = reorder(SYMBOL, -n), y = n)) +
+    geom_bar(stat = "identity", fill = bar_color, width = 0.7) +
+    geom_text(aes(label = n), vjust = -0.3, size = 3) +
+    labs(title = paste("Top 10 Mutated Genes in", sample_name),
+         x = "Gene Symbol",
+         y = "Mutation Count") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(hjust = 0.5)) +
+    ylim(0, max(top_genes$n) * 1.1)
+}
+
+# P3 sample
+plot_top_mutated_genes(vep_p3_filtered, sample_name = "P3", bar_color = "steelblue")
+
+# P6 sample
+plot_top_mutated_genes(vep_p6_filtered, sample_name = "P6", bar_color = "orange")
+```
+
+#### Top Functional Impact Types of Variants
+
+```{r}
+#| message: false
+#| warning: false
+# Functional consequence types
+get_top_consequences <- function(vep_data, sample_id) {
+  vep_data %>%
+    filter(!is.na(Consequence)) %>%
+    mutate(Main_Consequence = str_split(Consequence, "&", simplify = TRUE)[, 1]) %>%
+    count(Main_Consequence, sort = TRUE) %>%
+    slice_max(n, n = 10) %>%
+    mutate(Sample = sample_id)
+}
+
+p3_impact_stats <- get_top_consequences(vep_p3_filtered, "P3")
+p6_impact_stats <- get_top_consequences(vep_p6_filtered, "P6")
+
+# Barplot
+combined_stats <- bind_rows(p3_impact_stats, p6_impact_stats)
+
+ggplot(combined_stats, aes(x = reorder(Main_Consequence, n), y = n, fill = Sample)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(title = "Top Functional Impact Types of Variants",
+       x = "Consequence Type", y = "Number of Variants") +
+  theme_minimal()
+```
+
+#### Oncoplot
+
+Based on the oncoplot results:
+
+-   Both P3 and P6 samples show high tumor mutation burden (TMB), around 3800 mutations each.
+
+-   All genes in the top 10 list are altered in both samples (100% overlap).
+
+-   Missense_Mutation is the most common variant type across samples.
+
+-   MUC12 carries a Nonsense_Mutation, indicating a potential loss of function.
+
+-   Multiple mucin family genes are frequently mutated (MUC12, MUC16, MUC19), which may suggest involvement in epithelial or immune-ARID1B and ZFHX3, known cancer-related genes, are mutated in both samples.
+
+-   TTN and WIZ are also present but may represent background mutations due to gene length.
+
+-   The mutation types include a mix of missense, nonsense, frameshift, and splice site mutations.
+
+-   No sample-specific mutation pattern was observed—both cases share the same top altered genes.
+
+```{r}
+#| message: false
+#| warning: false
+# Define mapping
+consequence_map <- c(
+  "missense_variant" = "Missense_Mutation",
+  "nonsense_variant" = "Nonsense_Mutation",
+  "synonymous_variant" = "Silent",
+  "frameshift_variant" = "Frame_Shift_Ins",
+  "inframe_insertion" = "In_Frame_Ins",
+  "inframe_deletion" = "In_Frame_Del",
+  "splice_donor_variant" = "Splice_Site",
+  "splice_acceptor_variant" = "Splice_Site",
+  "stop_gained" = "Nonsense_Mutation",
+  "stop_lost" = "Nonstop_Mutation",
+  "start_lost" = "Translation_Start_Site",
+  "3_prime_UTR_variant" = "3'UTR",
+  "5_prime_UTR_variant" = "5'UTR",
+  "intron_variant" = "Intron",
+  "upstream_gene_variant" = "5'Flank",
+  "downstream_gene_variant" = "3'Flank",
+  "intergenic_variant" = "IGR",
+  "regulatory_region_variant" = "RNA"
+)
+
+# Map consequences before creating maf tables
+vep_p3_filtered <- vep_p3_filtered %>%
+  mutate(Variant_Classification = consequence_map[Consequence])
+
+vep_p6_filtered <- vep_p6_filtered %>%
+  mutate(Variant_Classification = consequence_map[Consequence])
+
+# Convert to MAF format
+maf_p3 <- vep_p3_filtered %>%
+  transmute(
+    Hugo_Symbol = SYMBOL,
+    Tumor_Sample_Barcode = "P3",
+    Variant_Classification = Variant_Classification,
+    Variant_Type = "SNP",
+    Chromosome = str_extract(Location, "^[^:]+"),
+    Start_Position = as.numeric(str_extract(Location, "(?<=:)[0-9]+")),
+    End_Position = Start_Position,
+    Reference_Allele = "N",
+    Tumor_Seq_Allele2 = Allele
+  )
+
+maf_p6 <- vep_p6_filtered %>%
+  transmute(
+    Hugo_Symbol = SYMBOL,
+    Tumor_Sample_Barcode = "P6",
+    Variant_Classification = Variant_Classification,
+    Variant_Type = "SNP",
+    Chromosome = str_extract(Location, "^[^:]+"),
+    Start_Position = as.numeric(str_extract(Location, "(?<=:)[0-9]+")),
+    End_Position = Start_Position,
+    Reference_Allele = "N",
+    Tumor_Seq_Allele2 = Allele
+  )
+
+combined_maf <- bind_rows(maf_p3, maf_p6)
+write_tsv(combined_maf, "functional_combined.maf")
+maf <- read.maf("functional_combined.maf")
+
+# Oncoplot（top 10 mutated genes）
+oncoplot(maf, top = 10)
+```
+
+Summary of plotmafSummary Output:
+
+-   Sample P3 shows a higher number of total mutations than P6, with 3802 vs. \~2500 variants respectively.
+
+-   Mutation burden is skewed, but the median mutation count across samples is 2755.
+
+-   A small subset of mutation types—like Translation_Start_Site and Nonstop_Mutation—are rare but detectable.
+
+-   All detected variants are SNPs, with no insertions, deletions, or structural variants captured in this annotation.
+
+-   SNV class breakdown (e.g., C\>T, T\>G) appears negligible, possibly due to input formatting or filtering before MAF conversion.
+
+-   The dashboard view shows a high density of functionally impactful mutations distributed across variant classes.
+
+-   Gene mutation patterns are highly consistent between samples, with no obvious outlier or sample-specific spike in burden.
+
+```{r}
+#| message: false
+#| warning: false
+# mutations in different functional terms
+plotmafSummary(maf = maf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE)
+
+getSampleSummary(maf)
+```
+
+### 2. CGI Results Analysis
+
+```{r}
+#| message: false
+#| warning: false
+alterations <- read.delim("cgi_results/alterations.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+# unique(alterations$CGI.Oncogenic.Prediction)
+
+drivers <- c(
+  "driver (oncodriveMUT)",
+  "driver (boostDM: non-tissue-specific model)"
+)
+
+# Filter driver mutations
+driver_mutations <- alterations %>%
+  filter(CGI.Oncogenic.Prediction %in% drivers)
+table(driver_mutations$CGI.Consequence)
+
+# By gene frequency
+driver_genes <- driver_mutations %>%
+  count(CGI.Gene, sort = TRUE)
+# Plot
+ggplot(driver_genes[1:10, ], aes(x = reorder(CGI.Gene, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(x = "Gene", y = "Driver Mutation Count", title = "Top Driver Genes (P3 & P6)")
+
+```

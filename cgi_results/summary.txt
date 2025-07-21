@@ -1,0 +1,29 @@
+===============================
+=== Summary of the analysis ===
+===============================
+
+=== CGI-ANALYSIS ===
+Analysis Code: Analysis (7076)
+Analysis ID: 83aaac79a0038c1f1bde
+CGI version: v23.12.2
+Date: 2025-07-21 12:23:20
+
+=== INPUT ===
+Analysed mutations: 29885
+Analysed cnas: 0
+Analysed fusions: 0
+Total samples: 2
+Cancer type: SCC
+Reference genome: hg38
+
+=== ALTERATIONS ===
+Driver mutations: 173
+Predicted and annotated drivers: 5
+Predicted drivers: 166
+Annotated drivers: 2
+
+=== BIOMARKERS ===
+Biomarkers in cancer type: 203
+Biomarkers in cancer type - Level A: 51
+Biomarkers in other cancer type: 2752
+
