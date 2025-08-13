@@ -1,0 +1,736 @@
+---
+title: "Internship Project"
+author: "Shumeng Li"
+format: pdf
+editor: visual
+---
+
+## Part 1
+
+```{r, load_libraries}
+#| message: false
+#| warning: false
+# load required packages
+if (!requireNamespace("maftools", quietly = TRUE)) {
+  install.packages("BiocManager")
+  BiocManager::install("maftools")
+}
+#BiocManager::install("BSgenome.Hsapiens.UCSC.hg38")
+#install.packages("patchwork")
+library(maftools)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(tidyverse)
+library(readr)
+library(ggpubr)
+library(scales)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(patchwork)
+```
+
+#### 1. Define the input file list and read the files.
+
+```{r}
+#| message: false
+#| warning: false
+# Set path
+sample_ids <- c("P3", "P4", "P5", "P6", "P7", "P8", "P9")
+base_path <- "/Users/afra/Desktop/Internship_Project/data"
+file_paths <- file.path(base_path, paste0(sample_ids, ".vep.tsv"))
+
+output_dir <- "/Users/afra/Desktop/Internship_Project/variant_tables"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+output_dir_p1_fig <- "/Users/afra/Desktop/Internship_Project/p1_plots"
+dir.create(output_dir_p1_fig, showWarnings = FALSE, recursive = TRUE)
+
+names(file_paths) <- sample_ids
+
+# Functional variant types
+functional_types <- c(
+  "missense_variant", "frameshift_variant", "stop_gained",
+  "start_lost", "stop_lost", "splice_donor_variant",
+  "splice_acceptor_variant", "inframe_insertion",
+  "inframe_deletion", "protein_altering_variant",
+  "nonstop_variant", "transcript_ablation"
+)
+
+# VEP → MAF mapping
+consequence_map <- c(
+  "missense_variant" = "Missense_Mutation",
+  "nonsense_variant" = "Nonsense_Mutation",
+  "synonymous_variant" = "Silent",
+  "frameshift_variant" = "Frame_Shift_Ins",
+  "inframe_insertion" = "In_Frame_Ins",
+  "inframe_deletion" = "In_Frame_Del",
+  "splice_donor_variant" = "Splice_Site",
+  "splice_acceptor_variant" = "Splice_Site",
+  "stop_gained" = "Nonsense_Mutation",
+  "stop_lost" = "Nonstop_Mutation",
+  "start_lost" = "Translation_Start_Site",
+  "3_prime_UTR_variant" = "3'UTR",
+  "5_prime_UTR_variant" = "5'UTR",
+  "intron_variant" = "Intron",
+  "upstream_gene_variant" = "5'Flank",
+  "downstream_gene_variant" = "3'Flank",
+  "intergenic_variant" = "IGR",
+  "regulatory_region_variant" = "RNA"
+)
+```
+
+#### 2. Batch read and process data
+
+```{r}
+#| message: false
+#| warning: false
+# Save tmb & maf list
+tmb_total <- c()
+tmb_func <- c()
+maf_list <- list()
+
+for (sid in sample_ids) {
+  file <- file_paths[[sid]]
+  
+  if (!file.exists(file)) {
+    warning(paste("File not found:", file))
+    next
+  }
+  
+  lines <- readLines(file)
+  header_line <- grep("^#Uploaded_variation", lines)
+  dat <- read.table(file, header = TRUE, sep = "\t", 
+                    skip = header_line - 1, quote = "", 
+                    stringsAsFactors = FALSE, comment.char = "")
+  
+  # Record total number of mutations
+  tmb_total[sid] <- nrow(dat) / 38
+  
+  # Filter functional mutations
+  func <- dat %>% filter(Consequence %in% functional_types)
+  tmb_func[sid] <- nrow(func) / 38
+  
+  if (nrow(func) == 0) next
+  
+  func <- func %>% mutate(Variant_Classification = consequence_map[Consequence])
+  
+  func <- func %>%
+    mutate(
+      Chromosome = str_extract(Location, "^[^:]+"),
+      Start_Position = as.integer(str_extract(Location, "(?<=:)[0-9]+")),
+      End_Position = Start_Position
+    )
+  
+  # Extract reference alleles
+  ref_base <- getSeq(Hsapiens, 
+                     func$Chromosome, func$Start_Position, func$Start_Position)
+  func$Reference_Allele <- as.character(ref_base)
+  
+  maf <- func %>%
+    transmute(
+      Hugo_Symbol = SYMBOL,
+      Tumor_Sample_Barcode = sid,
+      Variant_Classification = Variant_Classification,
+      Variant_Type = "SNP", 
+      Chromosome = Chromosome,
+      Start_Position = Start_Position,
+      End_Position = End_Position,
+      Reference_Allele = Reference_Allele,
+      Tumor_Seq_Allele2 = Allele
+    )
+  
+  maf_list[[sid]] <- maf
+  
+  # Save MAF files for each sample
+  write.table(maf,
+              file = file.path(output_dir, paste0(sid, ".maf.tsv")),
+              sep = "\t", quote = FALSE, row.names = FALSE)
+}
+```
+
+#### 3. Combine and output MAF files + TMB Table & Barplot
+
+```{r}
+#| message: false
+#| warning: false
+# MAF table for all samples combined
+combined_maf <- bind_rows(maf_list)
+write.table(combined_maf, 
+            file = file.path(output_dir, "all_samples_updated.maf.tsv"),
+            sep = "\t", quote = FALSE, row.names = FALSE)
+
+# Save TMB results
+tmb_table <- data.frame(
+  Sample = names(tmb_total),
+  TMB_total = tmb_total,
+  TMB_functional = tmb_func
+)
+
+write.table(tmb_table,
+            file = file.path(output_dir, "TMB_per_sample.tsv"),
+            sep = "\t", quote = FALSE, row.names = FALSE)
+
+# Load as maftools object
+maf <- read.maf("variant_tables/all_samples_updated.maf.tsv")
+
+# TMB table
+tmb_df <- read_tsv("variant_tables/TMB_per_sample.tsv")
+
+tmb_df <- tmb_df %>%
+  mutate(Functional_TMB_percent = round((TMB_functional / TMB_total) * 100, 2))
+tmb_display <- tmb_df %>%
+  dplyr::rename(
+    `Sample` = Sample,
+    `TMB_total` = TMB_total,
+    `TMB_functional` = TMB_functional,
+    `Functional_TMB_%` = Functional_TMB_percent
+  )
+table_plot <- ggtexttable(tmb_display, rows = NULL, theme = ttheme("light"))
+title <- text_grob("Tumor Mutation Burden (TMB) per sample", 
+                   face = "bold", size = 14)
+ggarrange(title, table_plot, ncol = 1, heights = c(0.15, 1))
+
+# Bar chart
+tmb_df <- tmb_df %>%
+  mutate(Functional_TMB_percent = paste0(
+    round((TMB_functional / TMB_total) * 100, 2), "%"))
+
+func_tmb <- ggplot(tmb_df, aes(x = Sample, y = TMB_functional)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = Functional_TMB_percent), vjust = -0.3, size = 4) +
+  labs(title = "Functional TMB per sample", y = "Functional TMB", x = "Sample") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.text = element_text(size = 11)
+  )
+ggsave(file.path(output_dir_p1_fig, "functional_TMB_per_sample.png"), 
+       func_tmb, width = 8, height = 5, dpi = 300, bg = "white")
+func_tmb
+```
+
+#### 4. Oncoplot and plotmafSummary Dashboard
+
+```{r}
+#| message: false
+#| warning: false
+# Oncoplot top 10
+oncoplot(maf, top = 10)
+# Oncoplot PNG
+png(file.path(output_dir_p1_fig, "oncoplot_top10.png"), 
+    width = 2500, height = 1500, res = 300)
+oncoplot(maf, top = 10)
+dev.off()
+
+# Summary Dashboard
+plotmafSummary(maf = maf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE)
+# Summary Dashboard PNG
+png(file.path(output_dir_p1_fig, "maf_summary_dashboard.png"), 
+    width = 2500, height = 1500, res = 300)
+plotmafSummary(maf = maf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE)
+dev.off()
+```
+
+#### 5. **Top10 mutated gene**
+
+```{r}
+#| message: false
+#| warning: false
+if (!dir.exists("outputs")) {
+  dir.create("outputs")
+}
+
+colors <- c("P3" = "orange", "P4" = "red", "P5" = "lightblue", 
+            "P6" = "yellow", "P7" = "pink", "P8" = "purple", 
+            "P9" = "lightgreen")
+
+# Barplot
+plot_top_mutated_genes <- function(maf_df, sample_name, bar_color = "steelblue") {
+  top_genes <- maf_df %>%
+    filter(!is.na(Hugo_Symbol), Hugo_Symbol != "", Hugo_Symbol != "-") %>%
+    count(Hugo_Symbol, sort = TRUE) %>%
+    slice_max(n, n = 10)
+  
+  p <- ggplot(top_genes, aes(x = reorder(Hugo_Symbol, n), y = n)) +
+    geom_bar(stat = "identity", fill = bar_color, width = 0.7) +
+    geom_text(aes(label = n), vjust = -0.3, size = 2) +
+    labs(title = paste("Top 10 Mutated Genes in", sample_name),
+         x = "Gene Symbol", y = "Mutation Count") +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+      axis.text.y = element_text(size = 5),
+      axis.title.x = element_text(size = 6),
+      axis.title.y = element_text(size = 6),
+      plot.title = element_text(hjust = 0.5, size = 6)
+    ) +
+    ylim(0, max(top_genes$n) * 1.2)
+  
+  return(list(plot = p, table = top_genes))
+}
+
+# Loop through each sample
+for (sid in sample_ids) {
+  maf_df <- maf_list[[sid]]
+  result <- plot_top_mutated_genes(
+    maf_df, sample_name = sid, bar_color = colors[[sid]])
+  
+  # Save plot
+  #ggsave(filename = paste0("plots/top10_genes_", sid, ".png"),
+  #       plot = result$plot, width = 6, height = 5)
+  
+  # Save table
+  #write.csv(result$table,
+  #          file = paste0("plots/top10_genes_", sid, ".csv"),
+  #          row.names = FALSE)
+}
+
+# Combine all samples and compute top 10 across all
+all_maf <- bind_rows(maf_list)
+
+top_genes_all <- all_maf %>%
+  filter(!is.na(Hugo_Symbol), Hugo_Symbol != "", Hugo_Symbol != "-") %>%
+  count(Hugo_Symbol, sort = TRUE) %>%
+  slice_max(n, n = 10)
+
+# Save table
+write.csv(top_genes_all,
+          file = "outputs/top10_genes_all_samples.csv",
+          row.names = FALSE)
+
+# Plot overall top10
+p_all <- ggplot(top_genes_all, aes(x = reorder(Hugo_Symbol, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.7) +
+  geom_text(aes(label = n), vjust = -0.3, size = 3) +
+  labs(title = "Top 10 Mutated Genes Across All Samples",
+       x = "Gene Symbol", y = "Mutation Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5)) +
+  ylim(0, max(top_genes_all$n) * 1.1)
+
+# Save overall plot (PNG)
+ggsave(filename = file.path(output_dir_p1_fig, "top10_genes_all_samples.png"),
+  plot = p_all, width = 8, height = 5, dpi = 300, bg = "white")
+```
+
+```{r}
+#| message: false
+#| warning: false
+p_all
+
+plot_list <- list()
+
+for (sid in sample_ids) {
+  maf_df <- maf_list[[sid]]
+  result <- plot_top_mutated_genes(
+    maf_df, sample_name = sid, bar_color = colors[[sid]])
+  plot_list[[sid]] <- result$plot
+}
+
+combined_plot <- wrap_plots(plot_list, ncol = 3)
+ggsave(filename = file.path(output_dir_p1_fig, "top10_genes_all_samples_combined.png"),
+  plot = combined_plot, width = 15, height = 10, dpi = 300, bg = "white")
+
+combined_plot
+```
+
+#### **6. Manual driver mutation annotation**
+
+-   TTN appears as the most mutated gene — this is common in WES data due to its large size, but it’s often considered a “passenger mutation” in cancer studies.
+
+-   TP53, ARID1B, MUC16, and NOTCH1 show high mutation counts — these are well-established driver genes in various cancers.
+
+-   Genes like PIK3CA, PTEN, and EGFR are clinically actionable in some cancer types, even though they appear less frequently here.
+
+```{r}
+#| message: false
+#| warning: false
+for (sid in sample_ids) {
+  write_tsv(
+    maf_list[[sid]],
+    file.path(output_dir, paste0(sid, "_functional.maf.tsv"))
+  )
+}
+
+# # Define a set of known cancer-related driver genes
+cancer_genes <- c(
+  "TP53", "KRAS", "EGFR", "ARID1A", "ARID1B", "NOTCH1", "PIK3CA",
+  "PTEN", "CDKN2A", "SMAD4", "MUC16", "ZFHX3", "TTN", "FAT1", "CSMD3"
+)
+
+# Filter mutation records that are in known cancer-related genes
+driver_mutations <- combined_maf %>%
+  filter(Hugo_Symbol %in% cancer_genes) %>%
+  count(Hugo_Symbol, sort = TRUE)
+
+# Plot top mutated cancer-relevant genes
+driver_mut <- ggplot(driver_mutations, aes(x = reorder(Hugo_Symbol, n), y = n)) +
+  geom_bar(stat = "identity", fill = "lightblue", width = 0.7) +
+  geom_text(aes(label = n), vjust = -0.3, size = 3) +
+  coord_flip() +
+  labs(
+    title = "Top Cancer-Relevant Mutated Genes Across All Samples",
+    x = "Gene Symbol", y = "Mutation Count"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Save the mutation table for cancer-related genes
+write_csv(driver_mutations, 
+          file = "outputs/driver_mutation_summary.csv")
+
+# Save the plot
+ggsave(filename = file.path(output_dir_p1_fig, "driver_mutations_overall.png"),
+  plot = driver_mut, width = 8, height = 5, dpi = 300, bg = "white")
+
+driver_mut
+```
+
+## Part 2
+
+```{r, load_libraries}
+#| message: false
+#| warning: false
+# load required packages
+if (!requireNamespace("sigminer", quietly = TRUE)) {
+  install.packages("sigminer")
+}
+if (!requireNamespace("BSgenome.Hsapiens.UCSC.hg38", quietly = TRUE)) {
+  BiocManager::install("BSgenome.Hsapiens.UCSC.hg38")
+}
+
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(maftools)
+library(sigminer)
+library(ggplot2)
+library(tibble)
+library(dplyr)
+library(tidyr)
+```
+
+#### 1. Define the input file list and read the files.
+
+```{r}
+#| message: false
+#| warning: false
+# Config
+input_maf_path <- "/Users/afra/Desktop/Internship_Project/variant_tables/all_samples_updated.maf.tsv"
+genome_pkg <- "BSgenome.Hsapiens.UCSC.hg38"
+
+out_dir_fig <- "/Users/afra/Desktop/Internship_Project/p2_plots"
+dir.create(out_dir_fig, showWarnings = FALSE, recursive = TRUE)
+
+out_dir_tab <- "/Users/afra/Desktop/Internship_Project/signature_tables"
+dir.create(out_dir_tab, showWarnings = FALSE, recursive = TRUE)
+```
+
+#### 2. Read MAF and extract SNV 96-context catalog
+
+```{r}
+#| message: false
+#| warning: false
+# Read MAF
+maf <- read.maf(input_maf_path) 
+
+# Extract SNV
+sig_cat <- sig_tally(
+  object      = maf,
+  type        = "snv",
+  ref_genome  = genome_pkg
+)
+nmf_mat <- sig_cat$nmf_matrix
+write.csv(as.data.frame(nmf_mat), file.path(out_dir_tab, "snv_catalog.csv"))
+```
+
+#### 3. Multi n_sig evaluation and selection of the best
+
+```{r}
+#| message: false
+#| warning: false
+# Range of n_sig to evaluate
+ks <- 2:6
+
+eval_list <- list()
+
+for (k in ks) {
+  message(sprintf("[sig_extract] Trying n_sig = %d ...", k))
+  res_k <- sig_extract(
+    nmf_mat,
+    n_sig = k,
+    nrun = 40,
+    seed = 2025 + k # Different seed for each k
+  )
+
+  # Column normalization (sum of each column = 1, required by similarity function)
+  norm_sig_k <- sweep(res_k$Signature, 2, colSums(res_k$Signature), "/")
+
+  # Calculate cosine similarity with COSMIC v3 SBS reference signatures
+  sim_k <- get_sig_similarity(
+    Signature = norm_sig_k,
+    sig_db = "SBS",
+    method = "cosine",
+    normalize = "row"
+  )
+
+  # Robustly extract the numeric similarity matrix
+  sim_mat_k <- if (is.list(sim_k) && !is.null(sim_k$similarity)) {
+    as.matrix(sim_k$similarity)
+  } else {
+    as.matrix(sim_k)
+  }
+
+  # Evaluation metric: mean of the best similarity per de novo signature
+  mean_best_cos <- mean(apply(sim_mat_k, 1, max), na.rm = TRUE)
+
+  eval_list[[as.character(k)]] <- list(
+    k = k,
+    sig_res = res_k,
+    sim_mat = sim_mat_k,   # <— store the numeric matrix
+    mean_max = mean_best_cos
+  )
+
+  message(sprintf("  n_sig = %d | mean(best cosine) = %.3f", k, mean_best_cos))
+}
+
+# Select the k with the highest mean(best cosine)
+score_df <- bind_rows(lapply(eval_list, function(x) data.frame(k=x$k, mean_best=x$mean_max)))
+best_k   <- score_df$k[which.max(score_df$mean_best)]
+message(sprintf(">>> Best n_sig = %d (mean best cosine = %.3f)",
+                best_k, score_df$mean_best[which.max(score_df$mean_best)]))
+
+# Use the best result for downstream analysis
+best_obj <- eval_list[[as.character(best_k)]]
+sig_res  <- best_obj$sig_res
+similarity_matrix <- best_obj$sim_mat   # rows = de novo signatures, columns = COSMIC
+
+# Save evaluation scores
+write.csv(score_df, file.path(out_dir_tab, "n_sig_eval_scores.csv"), row.names = FALSE)
+
+# Save best COSMIC match for each de novo signature
+best_cosmic <- apply(similarity_matrix, 1, function(x) names(which.max(x)))
+best_sim <- apply(similarity_matrix, 1, max)
+best_map <- data.frame(
+  DeNovo = rownames(similarity_matrix),
+  COSMIC = unname(best_cosmic),
+  Similarity = round(best_sim, 3),
+  row.names  = NULL
+)
+write.csv(best_map, file.path(
+  out_dir_tab, sprintf("best_cosmic_match_k%d.csv", best_k)), row.names = FALSE)
+
+# Print score table
+print(score_df)
+```
+
+```{r}
+#| message: false
+#| warning: false
+best_cosine <- ggplot(score_df, aes(x = k, y = mean_best)) +
+  geom_line() + geom_point(size = 2) +
+  geom_vline(xintercept = best_k, linetype = 2) +
+  labs(title = "Mean(best cosine) vs. number of signatures",
+       x = "n_sig (k)", y = "Mean of best cosine similarity") +
+  theme_minimal()
+
+ggsave(file.path(out_dir_fig, "best_cosine_num_sig.png"), 
+       best_cosine, width = 10, height = 5, dpi = 300, bg = "white")
+best_cosine
+```
+
+####  4. Extract de novo signatures by NMF
+
+```{r}
+#| message: false
+#| warning: false
+# Extract de novo signatures by NMF
+n_sig <- 5
+sig_res <- sig_extract(
+  nmf_mat,
+  n_sig,
+  nrun = 50,
+  seed = 2025
+)
+
+write.csv(sig_res$Signature, file.path(out_dir_tab, "signatures_profiles.csv"))
+write.csv(sig_res$Exposure,  file.path(out_dir_tab, "signature_exposures_by_sample.csv"))
+```
+
+#### 5. Compare to COSMIC v3 reference
+
+```{r}
+#| message: false
+#| warning: false
+# Calculate similarity
+norm_sig <- sweep(sig_res$Signature, 2, colSums(sig_res$Signature), "/")
+
+# colSums(norm_sig)
+sim_obj <- get_sig_similarity(
+  Signature = norm_sig,  
+  sig_db = "SBS",
+  method = "cosine",
+  normalize = "row"
+)
+# # Extract numeric similarity matrix
+similarity_matrix <- if (is.list(sim_obj) && !is.null(sim_obj$similarity)) {
+  as.matrix(sim_obj$similarity)
+} else {
+  as.matrix(sim_obj)
+}
+
+# print(similarity_matrix)
+write.csv(similarity_matrix, file.path(out_dir_tab, "cosmic_similarity.csv"))
+```
+
+```{r}
+#| message: false
+#| warning: false
+# Visualization
+
+# 96-context contour of each signature
+p_profile <- show_sig_profile(sig_res)
+ggsave(file.path(out_dir_fig, "signature_profiles.png"), 
+       p_profile, width = 10, height = 5, dpi = 300, bg = "white")
+
+# Composition of each sample signature
+p_expo <- show_sig_exposure(sig_res, style = "cosmic", 
+                            base_size = 10, font_scale = 0.8)
+ggsave(file.path(out_dir_fig, "signature_exposures_per_sample.png"), 
+       p_expo, width = 8, height = 5, dpi = 300, bg = "white")
+p_profile
+p_expo
+```
+
+#### 6. Best COSMIC match per de novo signature
+
+```{r}
+#| message: false
+#| warning: false
+best_cosmic <- apply(sim_obj$similarity, 1, 
+                  function(x) names(sort(x, decreasing = TRUE))[1])
+best_sim <- apply(sim_obj$similarity, 1, max)
+
+best_map <- data.frame(DeNovo = names(best_cosmic),
+                       COSMIC = unname(best_cosmic),
+                       Similarity = round(best_sim, 3))
+write.csv(best_map, file.path(out_dir_tab, 
+                              "best_cosmic_match_per_denovo_sig.csv"), row.names = FALSE)
+
+best_map
+```
+
+#### 7. Count the dominant COSMIC for each sample
+
+```{r}
+#| message: false
+#| warning: false
+expo_raw <- sig_res$Exposure
+if (grepl("^Sig", rownames(expo_raw))[1]) {
+  expo_mat <- t(expo_raw)
+} else {
+  expo_mat <- expo_raw
+}
+
+# Calculate the de novo signature with the largest proportion in each sample
+expo_prop <- sweep(expo_mat, 1, rowSums(expo_mat), "/")
+dom_denovo <- colnames(expo_prop)[max.col(expo_prop, ties.method = "first")]
+
+# de novo to COSMIC mapping
+denovo2cosmic <- setNames(best_map$COSMIC, best_map$DeNovo)
+dom_cosmic    <- denovo2cosmic[dom_denovo]
+
+dom_tbl <- data.frame(
+  Sample = rownames(expo_prop),
+  Dominant_DeNovo = dom_denovo,
+  Dominant_COSMIC = dom_cosmic,
+  Dominant_Prop = round(apply(expo_prop, 1, max), 3),
+  row.names = NULL
+)
+write.csv(dom_tbl, file.path(out_dir_tab, 
+                             "dominant_signature_per_sample.csv"), row.names = FALSE)
+dom_tbl
+```
+
+```{r}
+#| message: false
+#| warning: false
+#UV / APOBEC 
+uv_set <- c("SBS7a","SBS7b","SBS7c","SBS7d")     # UV
+apobec_set <- c("SBS2","SBS13")                      # APOBEC
+mmr_set <- c("SBS15")
+mmr_n <- sum(dom_tbl$Dominant_COSMIC %in% mmr_set, na.rm = TRUE)
+
+n_total <- nrow(dom_tbl)
+uv_n <- sum(dom_tbl$Dominant_COSMIC %in% uv_set, na.rm = TRUE)
+apobec_n <- sum(dom_tbl$Dominant_COSMIC %in% apobec_set, na.rm = TRUE)
+
+cat(sprintf(
+  "Interpretation: UV-related signature dominant in %d/%d tumors; APOBEC dominant in %d/%d tumors; SBS15 dominant in %d/%d tumors.\n",
+  uv_n, n_total, apobec_n, n_total, mmr_n, n_total))
+```
+
+#### 8. The dominant COSMIC signature and proportion for each sample
+
+```{r}
+#| message: false
+#| warning: false
+p_dom <- ggplot(dom_tbl, aes(x = Sample, y = Dominant_Prop,
+                             fill = Dominant_COSMIC, label = Dominant_COSMIC)) +
+  geom_col() +
+  geom_text(vjust = -0.2, size = 3) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Dominant COSMIC signature per sample",
+       x = "Sample", y = "Dominant proportion") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none")
+ggsave(file.path(out_dir_fig, "dominant_signature_per_sample.png"),
+       p_dom, width = 8, height = 5, dpi = 300, bg = "white")
+p_dom
+```
+
+```{r}
+#| message: false
+#| warning: false
+# Aggregating exposure matrices according to UV/APOBEC/Other
+denovo2cosmic <- setNames(best_map$COSMIC, best_map$DeNovo)
+# Exposure matrix
+expo_raw <- sig_res$Exposure
+expo_mat <- if (grepl("^Sig", rownames(expo_raw))[1]) t(expo_raw) else as.matrix(expo_raw)
+
+# de novo to COSMIC
+cosmic_cols <- denovo2cosmic[colnames(expo_mat)]
+mech <- ifelse(cosmic_cols %in% uv_set, "UV",
+        ifelse(cosmic_cols %in% apobec_set, "APOBEC", "Other"))
+
+expo_df <- as.data.frame(expo_mat)
+expo_df$Sample <- rownames(expo_df)
+expo_long <- expo_df |>
+  pivot_longer(-Sample, names_to = "DeNovo", values_to = "Exposure") |>
+  mutate(
+    COSMIC = denovo2cosmic[DeNovo],
+    Mechanism = case_when(
+      COSMIC %in% uv_set     ~ "UV",
+      COSMIC %in% apobec_set ~ "APOBEC",
+      COSMIC %in% c("SBS15") ~ "SBS15",
+      TRUE                   ~ "Other"
+    )
+  ) |>
+  group_by(Sample, Mechanism) |>
+  summarise(Exposure = sum(Exposure), .groups = "drop") |>
+  group_by(Sample) |>
+  mutate(Prop = Exposure / sum(Exposure))
+
+write.csv(expo_long, file.path(out_dir_tab, 
+                               "mechanism_exposure_by_sample.csv"), row.names = FALSE)
+
+# Mechanism proportion
+p_mech <- ggplot(expo_long, aes(x = Sample, y = Prop, fill = Mechanism)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Mechanism-level contributions per sample",
+       x = "Sample", y = "Proportion") +
+  theme_minimal(base_size = 11)
+ggsave(file.path(out_dir_fig, "mechanism_exposures_per_sample.png"),
+       p_mech, width = 8, height = 5, dpi = 300, bg = "white")
+p_mech
+```
