@@ -10,13 +10,14 @@ The workflow follows GATK Best Practices, with variant annotation using VEP and 
 |-------------|-------------|
 | **cgi_results/** | Annotation results from Cancer Genome Interpreter (CGI) |
 | **outputs/** | Summary tables from part 1, including driver mutation summary and Top 10 mutated genes |
-| **p1_plots/** | Figures for Part 1 (mutation burden, mutation landscape, driver genes) |
+| **p1_plots/** | Figures for Part 1 (mutation burden, mutation landscape, driver genes, COSMIC CGC cross-reference) |
 | **p2_plots/** | Figures for Part 2 (mutational signatures, COSMIC mapping, mechanism grouping) |
 | **signature_tables/** | Results from signature analysis, including COSMIC matches, exposures, and similarity scores |
 | **Internship Project Report – Somatic Analysis.pdf** | Final project report (LaTeX compiled PDF) |
 | **README.md** | Project documentation (this file) |
 | **internship_code.qmd** | Quarto source for the report |
-| **variant_tables.zip** | Annotated variant tables per sample (VEP) |
+| **variant_tables/** | Per-sample and combined MAF tables, functional mutation tables, COSMIC CGC annotation results |
+| **Cosmic_CancerGeneCensus_v102_GRCh38.tsv** | Reference table from COSMIC Cancer Gene Census (v102, GRCh38) |
 | **wes_cscc_pipeline.png** | Workflow diagram |
 
 ---
@@ -38,13 +39,17 @@ The workflow follows GATK Best Practices, with variant annotation using VEP and 
 1. **Preprocessing** – QC, BWA-MEM alignment, sorting, indexing, duplicate marking  
 2. **Somatic Variant Calling** – Mutect2 tumor–normal mode, filtering  
 3. **Annotation** – VEP offline annotation, CGI driver mutation annotation  
-4. **Part 1 Analysis** – Mutation burden, mutation landscape, driver gene identification  
-5. **Part 2 Analysis** –  
+4. **Part 1 Analysis** –
+   - Mutation burden calculation
+   - mutation landscape visualisation
+   - driver gene identification
+   - cross-reference with COSMIC Cancer Gene Census (CGC)
+6. **Part 2 Analysis** –  
    - Construct 96-context SNV catalogue  
    - Extract mutational signatures (NMF)  
    - Match de novo signatures to COSMIC SBS  
    - Group signatures into mechanisms (UV, APOBEC, MMR)  
-6. **Visualization** – Oncoplots, signature profiles, exposure plots, mechanism contributions
+7. **Visualization** – Oncoplots, signature profiles, exposure plots, mechanism contributions
 
 ---
 
