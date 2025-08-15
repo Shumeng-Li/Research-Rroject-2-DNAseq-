@@ -13,6 +13,7 @@ The workflow follows GATK Best Practices, with variant annotation using VEP and 
 | **p1_plots/** | Figures for Part 1 (mutation burden, mutation landscape, driver genes, COSMIC CGC cross-reference) |
 | **p2_plots/** | Figures for Part 2 (mutational signatures, COSMIC mapping, mechanism grouping) |
 | **signature_tables/** | Results from signature analysis, including COSMIC matches, exposures, and similarity scores |
+| **scripts/** | Bash scripts for the main WES analysis pipeline, including alignment, duplicate marking, somatic variant calling, filtering, and annotation |
 | **Internship Project Report – Somatic Analysis.pdf** | Final project report (LaTeX compiled PDF) |
 | **README.md** | Project documentation (this file) |
 | **internship_code.qmd** | Quarto source for the report |
